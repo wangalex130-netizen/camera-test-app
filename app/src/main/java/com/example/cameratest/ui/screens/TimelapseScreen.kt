@@ -54,29 +54,34 @@ fun TimelapseScreen() {
     val scope = rememberCoroutineScope()
     var job by remember { mutableStateOf<Job?>(null) }
 
-    DisposableEffect(Unit) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                status = when (state) {
-                    Player.STATE_IDLE -> "待命"
-                    Player.STATE_BUFFERING -> "连接 / 缓冲中…"
-                    Player.STATE_READY -> { playing = true; "已连接，播放中" }
-                    Player.STATE_ENDED -> "结束"
-                    else -> status
-                }
-            }
+    fun stopCapture() {
+        job?.cancel()
+        job = null
+        capturing = false
+    }
 
-            override fun onPlayerError(error: PlaybackException) {
-                status = "播放失败：${error.localizedMessage ?: error.message ?: "未知错误"}"
-                playing = false
-                capturing = false
+    fun saveFrame(bmp: Bitmap, index: Int): String? {
+        val name = "frame_%05d.jpg".format(index)
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CameraTestApp")
+                }
+                val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                context.contentResolver.openOutputStream(uri!!)?.use { out ->
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                }
+                "相册 / Pictures/CameraTestApp/$name"
+            } else {
+                val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "CameraTestApp")
+                dir.mkdirs()
+                val f = File(dir, name)
+                FileOutputStream(f).use { out -> bmp.compress(Bitmap.CompressFormat.JPEG, 90, out) }
+                f.absolutePath
             }
-        }
-        exoPlayer.addListener(listener)
-        onDispose {
-            exoPlayer.removeListener(listener)
-            exoPlayer.release()
-        }
+        } catch (e: Exception) { "保存失败：${e.localizedMessage}" }
     }
 
     fun startPlayback() {
@@ -104,30 +109,6 @@ fun TimelapseScreen() {
         status = "已停止"
     }
 
-    fun saveFrame(bmp: Bitmap, index: Int): String? {
-        val name = "frame_%05d.jpg".format(index)
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val values = ContentValues().apply {
-                    put(MediaStore.Images.Media.DISPLAY_NAME, name)
-                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CameraTestApp")
-                }
-                val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                context.contentResolver.openOutputStream(uri!!)?.use { out ->
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
-                }
-                "相册 / Pictures/CameraTestApp/$name"
-            } else {
-                val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "CameraTestApp")
-                dir.mkdirs()
-                val f = File(dir, name)
-                FileOutputStream(f).use { out -> bmp.compress(Bitmap.CompressFormat.JPEG, 90, out) }
-                f.absolutePath
-            }
-        } catch (e: Exception) { "保存失败：${e.localizedMessage}" }
-    }
-
     fun startCapture() {
         capturing = true
         captured = 0
@@ -146,10 +127,29 @@ fun TimelapseScreen() {
         }
     }
 
-    fun stopCapture() {
-        job?.cancel()
-        job = null
-        capturing = false
+    DisposableEffect(Unit) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                status = when (state) {
+                    Player.STATE_IDLE -> "待命"
+                    Player.STATE_BUFFERING -> "连接 / 缓冲中…"
+                    Player.STATE_READY -> { playing = true; "已连接，播放中" }
+                    Player.STATE_ENDED -> "结束"
+                    else -> status
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                status = "播放失败：${error.localizedMessage ?: error.message ?: "未知错误"}"
+                playing = false
+                stopCapture()
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose {
+            exoPlayer.removeListener(listener)
+            exoPlayer.release()
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
