@@ -7,6 +7,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -14,6 +15,9 @@ import com.example.cameratest.ui.components.ScopeBadge
 import com.example.cameratest.ui.components.StatusDot
 import com.example.cameratest.ui.theme.Muted
 import com.example.cameratest.viewmodel.AppViewModel
+import com.example.cameratest.data.NetScope
+import com.example.cameratest.data.ProbeProtocol
+import com.example.cameratest.data.TestResult
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
