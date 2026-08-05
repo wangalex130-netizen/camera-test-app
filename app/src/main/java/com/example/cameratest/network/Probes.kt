@@ -2,11 +2,8 @@ package com.example.cameratest.network
 
 import android.util.Base64
 import com.example.cameratest.data.ProbeProtocol
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.*
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
