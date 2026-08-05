@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,8 +37,18 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publish APK to Release (direct download link)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: 最新构建 (app-debug.apk)
+          body: 安卓摄像头测试 APP 的最新 debug APK，点开页面里的 Assets 即可直接下载安装，无需解压。
+          files: app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
