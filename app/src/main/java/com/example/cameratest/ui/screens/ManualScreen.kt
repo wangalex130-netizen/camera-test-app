@@ -2,6 +2,7 @@ package com.example.cameratest.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
+import androidx.compose.material3.menuAnchor
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,8 +30,8 @@ fun ManualScreen(vm: AppViewModel = viewModel()) {
     var port by remember { mutableStateOf("554") }
     var path by remember { mutableStateOf("/11") }
     var user by remember { mutableStateOf("admin") }
-    var password by remember { mutableStateOf("") }
-    var protocol by remember { mutableStateOf(ProbeProtocol.TCP) }
+    var password by remember { mutableStateOf("abc123456") }
+    var protocol by remember { mutableStateOf(ProbeProtocol.RTSP) }
     var testing by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<String?>(null) }
     var ok by remember { mutableStateOf(false) }
@@ -51,7 +52,7 @@ fun ManualScreen(vm: AppViewModel = viewModel()) {
                     readOnly = true,
                     label = { Text("协议", color = Muted) },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(exp) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.menuAnchor().fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
