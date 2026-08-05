@@ -74,26 +74,49 @@ fun ManualScreen(vm: AppViewModel = viewModel()) {
                     testing = true
                     result = null
                     scope.launch {
-                        val p = port.toIntOrNull() ?: 554
-                        val r = probeByProtocol(host.trim(), p, protocol, path.trim(), user.trim(), password)
-                        testing = false
-                        ok = r.reachable
-                        latency = r.latencyMs
-                        result = r.detail
-                        vm.addResult(
-                            TestResult(
-                                id = 0, scope = if (host.contains("192.168") || host.contains("10.") || host.contains("172.")) NetScope.LAN else NetScope.WAN,
-                                target = "$host:$p", protocol = protocol,
-                                success = r.reachable, latencyMs = r.latencyMs,
-                                message = r.detail
+                        try {
+                            val p = port.toIntOrNull() ?: 554
+                            val r = probeByProtocol(host.trim(), p, protocol, path.trim(), user.trim(), password)
+                            ok = r.reachable
+                            latency = r.latencyMs
+                            result = r.detail
+                            vm.addResult(
+                                TestResult(
+                                    id = 0, scope = if (host.contains("192.168") || host.contains("10.") || host.contains("172.")) NetScope.LAN else NetScope.WAN,
+                                    target = "$host:$p", protocol = protocol,
+                                    success = r.reachable, latencyMs = r.latencyMs,
+                                    message = r.detail
+                                )
                             )
-                        )
+                        } catch (e: Exception) {
+                            ok = false
+                            latency = 0L
+                            result = "探测异常: ${e.message}"
+                        } finally {
+                            testing = false
+                        }
                     }
                 }
             )
         }
 
         Spacer(Modifier.height(16.dp))
+        if (testing) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("正在探测…", fontWeight = FontWeight.SemiBold)
+                        Text("$host:$port (${protocol.label})", style = MaterialTheme.typography.bodySmall, color = Muted)
+                    }
+                }
+            }
+        }
         result?.let {
             Card(
                 modifier = Modifier.fillMaxWidth(),

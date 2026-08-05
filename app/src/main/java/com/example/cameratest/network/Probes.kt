@@ -7,6 +7,8 @@ import kotlinx.coroutines.sync.*
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.security.MessageDigest
+import kotlin.random.Random
 
 /** 原始探测结果（与 UI 解耦） */
 data class ProbeOutcome(val reachable: Boolean, val latencyMs: Long, val detail: String)
@@ -33,40 +35,111 @@ suspend fun tcpProbe(host: String, port: Int, timeoutMs: Int = 2000): ProbeOutco
         }
     }
 
-/** RTSP OPTIONS 探测：发送 OPTIONS 并读取首行判断服务是否可用 */
+private fun md5Hex(s: String): String {
+    val digest = MessageDigest.getInstance("MD5").digest(s.toByteArray())
+    return digest.joinToString("") { "%02x".format(it) }
+}
+
+private fun parseDigestParams(header: String): Map<String, String> {
+    val map = mutableMapOf<String, String>()
+    val idx = header.indexOf("Digest")
+    val body = if (idx >= 0) header.substring(idx + 6) else header
+    val regex = "(\\w+)=[\"']?([^\"',\\s]+)[\"']?".toRegex()
+    regex.findAll(body).forEach { m ->
+        map[m.groupValues[1].lowercase()] = m.groupValues[2].trim('"', '\'')
+    }
+    return map
+}
+
+/** RTSP OPTIONS 探测：支持 Digest 鉴权（CamHipro/V380 等国产摄像头常用） */
 suspend fun rtspProbe(
     host: String,
     port: Int,
     path: String,
     user: String = "",
     password: String = "",
-    timeoutMs: Int = 3000
+    timeoutMs: Int = 4000
 ): ProbeOutcome = withContext(Dispatchers.IO) {
     val start = System.nanoTime()
+    fun readResp(s: Socket): Pair<String, Map<String, String>> {
+        s.soTimeout = timeoutMs
+        val buf = ByteArray(2048)
+        val n = s.getInputStream().read(buf)
+        val resp = if (n > 0) String(buf, 0, n) else ""
+        val headers = mutableMapOf<String, String>()
+        resp.lines().drop(1).forEach { line ->
+            val colon = line.indexOf(':')
+            if (colon > 0) headers[line.substring(0, colon).trim().lowercase()] = line.substring(colon + 1).trim()
+        }
+        return resp to headers
+    }
+    fun buildAuthResponse(realm: String, nonce: String, qop: String?, uri: String): String {
+        val nc = "00000001"
+        val cnonce = Random.nextBytes(4).joinToString("") { "%02x".format(it) }
+        val a1 = md5Hex("$user:$realm:$password")
+        val a2 = md5Hex("OPTIONS:$uri")
+        val response = if (!qop.isNullOrEmpty()) {
+            md5Hex("$a1:$nonce:$nc:$cnonce:$qop:$a2")
+        } else {
+            md5Hex("$a1:$nonce:$a2")
+        }
+        val sb = StringBuilder("Digest ")
+        sb.append("username=\"$user\", ")
+        sb.append("realm=\"$realm\", ")
+        sb.append("nonce=\"$nonce\", ")
+        sb.append("uri=\"$uri\", ")
+        if (!qop.isNullOrEmpty()) {
+            sb.append("qop=$qop, ")
+            sb.append("nc=$nc, ")
+            sb.append("cnonce=\"$cnonce\", ")
+        }
+        sb.append("response=\"$response\"")
+        return sb.toString()
+    }
     try {
         Socket().use { s ->
             s.connect(InetSocketAddress(host, port), timeoutMs)
-            s.soTimeout = timeoutMs
             val rtspUrl = "rtsp://$host:$port$path"
-            val auth = if (user.isNotEmpty() || password.isNotEmpty())
-                "Authorization: Basic ${basicAuth(user, password)}\r\n" else ""
-            val req = "OPTIONS $rtspUrl RTSP/1.0\r\nCSeq: 1\r\n$auth\r\n\r\n"
-            s.getOutputStream().write(req.toByteArray())
+            val req1 = "OPTIONS $rtspUrl RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: CameraTestApp/1.0\r\n\r\n"
+            s.getOutputStream().write(req1.toByteArray())
             s.getOutputStream().flush()
-            val buf = ByteArray(1024)
-            val n = s.getInputStream().read(buf)
-            val resp = if (n > 0) String(buf, 0, n) else ""
+            val (resp1, headers1) = readResp(s)
+            val first1 = resp1.lines().firstOrNull() ?: ""
             val elapsed = (System.nanoTime() - start) / 1_000_000
-            val firstLine = resp.lines().firstOrNull() ?: ""
-            val ok = firstLine.contains("RTSP/1.0 2")
-            ProbeOutcome(
-                ok,
-                elapsed,
-                if (ok) "RTSP 服务可用 ($firstLine)" else "RTSP 响应异常: ${resp.take(80).replace("\n", " ")}"
-            )
+
+            if (first1.contains("RTSP/1.0 2")) {
+                return@withContext ProbeOutcome(true, elapsed, "RTSP 服务可用 ($first1)")
+            }
+
+            val authHeader = headers1["www-authenticate"] ?: ""
+            if (first1.contains("RTSP/1.0 4") && authHeader.contains("Digest", ignoreCase = true)) {
+                if (user.isBlank() || password.isBlank()) {
+                    return@withContext ProbeOutcome(false, elapsed, "摄像头需要账号密码（返回 401），请填写")
+                }
+                val params = parseDigestParams(authHeader)
+                val realm = params["realm"] ?: ""
+                val nonce = params["nonce"] ?: ""
+                val qop = params["qop"]
+                val auth = buildAuthResponse(realm, nonce, qop, rtspUrl)
+                val req2 = "OPTIONS $rtspUrl RTSP/1.0\r\nCSeq: 2\r\nUser-Agent: CameraTestApp/1.0\r\nAuthorization: $auth\r\n\r\n"
+                Socket().use { s2 ->
+                    s2.connect(InetSocketAddress(host, port), timeoutMs)
+                    s2.getOutputStream().write(req2.toByteArray())
+                    s2.getOutputStream().flush()
+                    val (resp2, _) = readResp(s2)
+                    val first2 = resp2.lines().firstOrNull() ?: ""
+                    val elapsed2 = (System.nanoTime() - start) / 1_000_000
+                    if (first2.contains("RTSP/1.0 2")) {
+                        return@withContext ProbeOutcome(true, elapsed2, "RTSP Digest 鉴权成功 ($first2)")
+                    }
+                    return@withContext ProbeOutcome(false, elapsed2, "鉴权失败: $first2")
+                }
+            }
+
+            return@withContext ProbeOutcome(false, elapsed, "RTSP 响应异常: ${resp1.take(120).replace("\n", " ")}")
         }
     } catch (e: Exception) {
-        ProbeOutcome(false, 0, e.message ?: "RTSP 探测失败")
+        ProbeOutcome(false, 0, "RTSP 探测失败: ${e.message}")
     }
 }
 
