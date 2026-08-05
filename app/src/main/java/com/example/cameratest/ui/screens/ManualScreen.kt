@@ -2,7 +2,6 @@ package com.example.cameratest.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
-import androidx.compose.material3.menuAnchor
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,21 +44,17 @@ fun ManualScreen(vm: AppViewModel = viewModel()) {
             LabeledTextField("主机（IP 或域名）", host, { host = it }, placeholder = "192.168.1.60")
             LabeledTextField("端口", port, { port = it.filter { c -> c.isDigit() } }, placeholder = "554")
 
-            ExposedDropdownMenuBox(expanded = exp, onExpandedChange = { exp = it }) {
-                OutlinedTextField(
-                    value = protocol.label,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("协议", color = Muted) },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(exp) },
-                    modifier = Modifier.menuAnchor().fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = Muted.copy(alpha = 0.5f)
-                    )
-                )
-                ExposedDropdownMenu(expanded = exp, onDismissRequest = { exp = false }) {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { exp = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text(protocol.label, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.weight(1f))
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = exp)
+                }
+                DropdownMenu(expanded = exp, onDismissRequest = { exp = false }) {
                     protocols.forEach {
                         DropdownMenuItem(text = { Text(it.label) }, onClick = { protocol = it; exp = false })
                     }
