@@ -1,0 +1,8 @@
+<resources>
+    <!-- Compose 应用只需一个无 ActionBar 的基底主题，具体视觉由 Material3 Compose 主题控制 -->
+    <style name="Theme.CameraTest" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#0B0F0E</item>
+        <item name="android:navigationBarColor">#0B0F0E</item>
+        <item name="android:windowBackground">#0B0F0E</item>
+    </style>
+</resources>
