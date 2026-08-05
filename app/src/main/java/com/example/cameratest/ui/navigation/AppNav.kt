@@ -5,6 +5,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.foundation.layout.*
@@ -14,6 +15,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.cameratest.ui.screens.HistoryScreen
 import com.example.cameratest.ui.screens.LanScreen
 import com.example.cameratest.ui.screens.ManualScreen
+import com.example.cameratest.ui.screens.PlayerScreen
 import com.example.cameratest.ui.screens.WanScreen
 import com.example.cameratest.viewmodel.AppViewModel
 
@@ -21,13 +23,14 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
     data object Lan : Screen("lan", "内网", Icons.Filled.Home)
     data object Wan : Screen("wan", "外网", Icons.Filled.Language)
     data object Manual : Screen("manual", "手动", Icons.Filled.Tune)
+    data object Player : Screen("play", "画面", Icons.Filled.Videocam)
     data object History : Screen("history", "历史", Icons.Filled.History)
 }
 
 @Composable
 fun AppNav(vm: AppViewModel = viewModel()) {
     var route by remember { mutableStateOf(Screen.Lan.route) }
-    val items = listOf(Screen.Lan, Screen.Wan, Screen.Manual, Screen.History)
+    val items = listOf(Screen.Lan, Screen.Wan, Screen.Manual, Screen.Player, Screen.History)
 
     Scaffold(
         bottomBar = {
@@ -48,6 +51,7 @@ fun AppNav(vm: AppViewModel = viewModel()) {
                 Screen.Lan.route -> LanScreen(vm)
                 Screen.Wan.route -> WanScreen(vm)
                 Screen.Manual.route -> ManualScreen(vm)
+                Screen.Player.route -> PlayerScreen()
                 Screen.History.route -> HistoryScreen(vm)
             }
         }

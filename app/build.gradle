@@ -61,4 +61,10 @@ dependencies {
     implementation 'androidx.compose.material:material-icons-extended'
 
     debugImplementation 'androidx.compose.ui:ui-tooling'
+
+    // RTSP 实时画面播放 (AndroidX Media3)
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    implementation 'androidx.media3:media3-exoplayer-rtsp:1.4.1'
+    implementation 'androidx.media3:media3-ui:1.4.1'
+    implementation 'androidx.media3:media3-common:1.4.1'
 }
