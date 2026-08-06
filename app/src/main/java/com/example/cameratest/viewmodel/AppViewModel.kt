@@ -22,7 +22,7 @@ class AppViewModel : ViewModel() {
 
     fun setRoute(r: String) { _route.value = r }
 
-    fun setLastTarget(t: String) { lastTarget = t }
+    fun updateLastTarget(t: String) { lastTarget = t }
 
     private var seq = 0L
 

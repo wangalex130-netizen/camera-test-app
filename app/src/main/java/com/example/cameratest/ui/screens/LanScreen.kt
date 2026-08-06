@@ -126,7 +126,7 @@ fun LanScreen(vm: AppViewModel = viewModel()) {
                         .padding(vertical = 4.dp)
                         .clickable {
                             // 点击设备 → 写入最近目标并切到手动测试页
-                            vm.setLastTarget("$host:$port")
+                            vm.updateLastTarget("$host:$port")
                             vm.setRoute("manual")
                         },
                     shape = RoundedCornerShape(10.dp),
