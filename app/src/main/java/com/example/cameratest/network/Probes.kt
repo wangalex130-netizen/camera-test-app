@@ -4,6 +4,8 @@ import android.util.Base64
 import com.example.cameratest.data.ProbeProtocol
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.*
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -16,6 +18,17 @@ data class WanOutcome(val reachable: Boolean, val latencyMs: Long, val detail: S
 
 /** 摄像头常用端口（内网扫描时使用） */
 val CAMERA_PORTS = listOf(554, 5544, 80, 8080, 81, 8000, 34567, 37777, 88, 6667)
+
+/** CamHipro/V380 等国产摄像头常见的 RTSP 路径，按优先级排序 */
+val COMMON_RTSP_PATHS = listOf(
+    "/11", "/12", "/13",
+    "/live/ch00_0", "/live/ch01_0", "/live/0",
+    "/streaming/channels/101", "/streaming/channels/1",
+    "/video1", "/video2", "/av0_0", "/av1_0",
+    "/onvif/streaming/channels/101",
+    "/user=admin_password=tlJWPb65_channel=1_stream=0.sdp",
+    "/stream1", "/stream"
+)
 
 private fun basicAuth(user: String, password: String): String =
     Base64.encodeToString("$user:$password".toByteArray(), Base64.NO_WRAP)
@@ -51,7 +64,58 @@ private fun parseDigestParams(header: String): Map<String, String> {
     return map
 }
 
-/** RTSP OPTIONS 探测：支持 Digest 鉴权（CamHipro/V380 等国产摄像头常用） */
+/** 完整读取一个 RTSP 响应（直到 \r\n\r\n） */
+private fun readRtspResponse(s: Socket, timeoutMs: Int): String {
+    s.soTimeout = timeoutMs
+    val ins = s.getInputStream()
+    val reader = BufferedReader(InputStreamReader(ins))
+    val sb = StringBuilder()
+    try {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (reader.ready()) {
+                val ch = reader.read()
+                if (ch == -1) break
+                sb.append(ch.toChar())
+                if (sb.endsWith("\r\n\r\n")) break
+            } else {
+                Thread.sleep(10)
+            }
+        }
+    } catch (_: Exception) {
+        // 超时或连接关闭，返回已读到内容
+    }
+    return sb.toString()
+}
+
+private fun buildDigestResponse(
+    user: String, password: String,
+    realm: String, nonce: String, qop: String?, uri: String
+): String {
+    val nc = "00000001"
+    val cnonce = Random.nextBytes(8).joinToString("") { "%02x".format(it) }
+    val a1 = md5Hex("$user:$realm:$password")
+    val a2 = md5Hex("OPTIONS:$uri")
+    val response = if (!qop.isNullOrEmpty()) {
+        md5Hex("$a1:$nonce:$nc:$cnonce:$qop:$a2")
+    } else {
+        md5Hex("$a1:$nonce:$a2")
+    }
+    val sb = StringBuilder("Digest ")
+    sb.append("username=\"$user\", ")
+    sb.append("realm=\"$realm\", ")
+    sb.append("nonce=\"$nonce\", ")
+    sb.append("uri=\"$uri\", ")
+    if (!qop.isNullOrEmpty()) {
+        sb.append("qop=$qop, ")
+        sb.append("nc=$nc, ")
+        sb.append("cnonce=\"$cnonce\", ")
+    }
+    sb.append("response=\"$response\"")
+    return sb.toString()
+}
+
+/** RTSP OPTIONS 探测：支持 Digest / Basic 鉴权（CamHipro/V380 等国产摄像头常用 Digest） */
 suspend fun rtspProbe(
     host: String,
     port: Int,
@@ -61,41 +125,6 @@ suspend fun rtspProbe(
     timeoutMs: Int = 4000
 ): ProbeOutcome = withContext(Dispatchers.IO) {
     val start = System.nanoTime()
-    fun readResp(s: Socket): Pair<String, Map<String, String>> {
-        s.soTimeout = timeoutMs
-        val buf = ByteArray(2048)
-        val n = s.getInputStream().read(buf)
-        val resp = if (n > 0) String(buf, 0, n) else ""
-        val headers = mutableMapOf<String, String>()
-        resp.lines().drop(1).forEach { line ->
-            val colon = line.indexOf(':')
-            if (colon > 0) headers[line.substring(0, colon).trim().lowercase()] = line.substring(colon + 1).trim()
-        }
-        return resp to headers
-    }
-    fun buildAuthResponse(realm: String, nonce: String, qop: String?, uri: String): String {
-        val nc = "00000001"
-        val cnonce = Random.nextBytes(4).joinToString("") { "%02x".format(it) }
-        val a1 = md5Hex("$user:$realm:$password")
-        val a2 = md5Hex("OPTIONS:$uri")
-        val response = if (!qop.isNullOrEmpty()) {
-            md5Hex("$a1:$nonce:$nc:$cnonce:$qop:$a2")
-        } else {
-            md5Hex("$a1:$nonce:$a2")
-        }
-        val sb = StringBuilder("Digest ")
-        sb.append("username=\"$user\", ")
-        sb.append("realm=\"$realm\", ")
-        sb.append("nonce=\"$nonce\", ")
-        sb.append("uri=\"$uri\", ")
-        if (!qop.isNullOrEmpty()) {
-            sb.append("qop=$qop, ")
-            sb.append("nc=$nc, ")
-            sb.append("cnonce=\"$cnonce\", ")
-        }
-        sb.append("response=\"$response\"")
-        return sb.toString()
-    }
     try {
         Socket().use { s ->
             s.connect(InetSocketAddress(host, port), timeoutMs)
@@ -103,44 +132,69 @@ suspend fun rtspProbe(
             val req1 = "OPTIONS $rtspUrl RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: CameraTestApp/1.0\r\n\r\n"
             s.getOutputStream().write(req1.toByteArray())
             s.getOutputStream().flush()
-            val (resp1, headers1) = readResp(s)
-            val first1 = resp1.lines().firstOrNull() ?: ""
+            val resp1 = readRtspResponse(s, timeoutMs)
             val elapsed = (System.nanoTime() - start) / 1_000_000
+            val first1 = resp1.lines().firstOrNull() ?: ""
+            val headers1 = parseRtspHeaders(resp1)
 
             if (first1.contains("RTSP/1.0 2")) {
                 return@withContext ProbeOutcome(true, elapsed, "RTSP 服务可用 ($first1)")
             }
 
             val authHeader = headers1["www-authenticate"] ?: ""
-            if (first1.contains("RTSP/1.0 4") && authHeader.contains("Digest", ignoreCase = true)) {
+            if (first1.contains("RTSP/1.0 4")) {
                 if (user.isBlank() || password.isBlank()) {
-                    return@withContext ProbeOutcome(false, elapsed, "摄像头需要账号密码（返回 401），请填写")
+                    return@withContext ProbeOutcome(false, elapsed, "摄像头需要账号密码（返回 401）")
                 }
-                val params = parseDigestParams(authHeader)
-                val realm = params["realm"] ?: ""
-                val nonce = params["nonce"] ?: ""
-                val qop = params["qop"]
-                val auth = buildAuthResponse(realm, nonce, qop, rtspUrl)
-                val req2 = "OPTIONS $rtspUrl RTSP/1.0\r\nCSeq: 2\r\nUser-Agent: CameraTestApp/1.0\r\nAuthorization: $auth\r\n\r\n"
-                Socket().use { s2 ->
-                    s2.connect(InetSocketAddress(host, port), timeoutMs)
-                    s2.getOutputStream().write(req2.toByteArray())
-                    s2.getOutputStream().flush()
-                    val (resp2, _) = readResp(s2)
+                if (authHeader.contains("Digest", ignoreCase = true)) {
+                    val params = parseDigestParams(authHeader)
+                    val realm = params["realm"] ?: ""
+                    val nonce = params["nonce"] ?: ""
+                    val qop = params["qop"]
+                    val auth = buildDigestResponse(user, password, realm, nonce, qop, rtspUrl)
+                    // 在同一连接上重试（nonce 通常与会话绑定）
+                    val req2 = "OPTIONS $rtspUrl RTSP/1.0\r\nCSeq: 2\r\nUser-Agent: CameraTestApp/1.0\r\nAuthorization: $auth\r\n\r\n"
+                    s.getOutputStream().write(req2.toByteArray())
+                    s.getOutputStream().flush()
+                    val resp2 = readRtspResponse(s, timeoutMs)
                     val first2 = resp2.lines().firstOrNull() ?: ""
                     val elapsed2 = (System.nanoTime() - start) / 1_000_000
                     if (first2.contains("RTSP/1.0 2")) {
                         return@withContext ProbeOutcome(true, elapsed2, "RTSP Digest 鉴权成功 ($first2)")
                     }
                     return@withContext ProbeOutcome(false, elapsed2, "鉴权失败: $first2")
+                } else if (authHeader.contains("Basic", ignoreCase = true)) {
+                    val auth = "Basic ${basicAuth(user, password)}"
+                    val req2 = "OPTIONS $rtspUrl RTSP/1.0\r\nCSeq: 2\r\nUser-Agent: CameraTestApp/1.0\r\nAuthorization: $auth\r\n\r\n"
+                    s.getOutputStream().write(req2.toByteArray())
+                    s.getOutputStream().flush()
+                    val resp2 = readRtspResponse(s, timeoutMs)
+                    val first2 = resp2.lines().firstOrNull() ?: ""
+                    val elapsed2 = (System.nanoTime() - start) / 1_000_000
+                    if (first2.contains("RTSP/1.0 2")) {
+                        return@withContext ProbeOutcome(true, elapsed2, "RTSP Basic 鉴权成功 ($first2)")
+                    }
+                    return@withContext ProbeOutcome(false, elapsed2, "鉴权失败: $first2")
                 }
+                return@withContext ProbeOutcome(false, elapsed, "鉴权方式不支持: $authHeader")
             }
 
-            return@withContext ProbeOutcome(false, elapsed, "RTSP 响应异常: ${resp1.take(120).replace("\n", " ")}")
+            return@withContext ProbeOutcome(false, elapsed, "RTSP 响应异常: $first1")
         }
     } catch (e: Exception) {
         ProbeOutcome(false, 0, "RTSP 探测失败: ${e.message}")
     }
+}
+
+private fun parseRtspHeaders(resp: String): Map<String, String> {
+    val headers = mutableMapOf<String, String>()
+    resp.lines().drop(1).forEach { line ->
+        val colon = line.indexOf(':')
+        if (colon > 0) {
+            headers[line.substring(0, colon).trim().lowercase()] = line.substring(colon + 1).trim()
+        }
+    }
+    return headers
 }
 
 /** 外网探测：先 DNS 解析，再 TCP 探测（验证 DDNS / 端口转发是否生效） */

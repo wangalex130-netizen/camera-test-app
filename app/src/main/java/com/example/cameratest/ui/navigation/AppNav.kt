@@ -32,7 +32,7 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
 
 @Composable
 fun AppNav(vm: AppViewModel = viewModel()) {
-    var route by remember { mutableStateOf(Screen.Lan.route) }
+    val route by vm.route.collectAsState()
     val items = listOf(Screen.Lan, Screen.Wan, Screen.Manual, Screen.Player, Screen.Timelapse, Screen.History)
 
     Scaffold(
@@ -41,7 +41,7 @@ fun AppNav(vm: AppViewModel = viewModel()) {
                 items.forEach { s ->
                     NavigationBarItem(
                         selected = route == s.route,
-                        onClick = { route = s.route },
+                        onClick = { vm.setRoute(s.route) },
                         icon = { Icon(s.icon, contentDescription = s.label) },
                         label = { Text(s.label) }
                     )
@@ -54,7 +54,7 @@ fun AppNav(vm: AppViewModel = viewModel()) {
                 Screen.Lan.route -> LanScreen(vm)
                 Screen.Wan.route -> WanScreen(vm)
                 Screen.Manual.route -> ManualScreen(vm)
-                Screen.Player.route -> PlayerScreen()
+                Screen.Player.route -> PlayerScreen(vm)
                 Screen.Timelapse.route -> TimelapseScreen()
                 Screen.History.route -> HistoryScreen(vm)
             }

@@ -25,8 +25,9 @@ import kotlinx.coroutines.launch
 @Composable
 fun ManualScreen(vm: AppViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
-    var host by remember { mutableStateOf("192.168.1.60") }
-    var port by remember { mutableStateOf("554") }
+    // 默认填你那台摄像头的内网地址与密码（之前是 60，现在最新是 218，可直接覆盖）
+    var host by remember(vm.lastTarget) { mutableStateOf(vm.lastTarget.split(":").getOrNull(0) ?: "192.168.1.218") }
+    var port by remember(vm.lastTarget) { mutableStateOf(vm.lastTarget.split(":").getOrNull(1) ?: "554") }
     var path by remember { mutableStateOf("/11") }
     var user by remember { mutableStateOf("admin") }
     var password by remember { mutableStateOf("abc123456") }
@@ -41,7 +42,7 @@ fun ManualScreen(vm: AppViewModel = viewModel()) {
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         SectionCard(title = "手动连接测试") {
-            LabeledTextField("主机（IP 或域名）", host, { host = it }, placeholder = "192.168.1.60")
+            LabeledTextField("主机（IP 或域名）", host, { host = it }, placeholder = "192.168.1.218")
             LabeledTextField("端口", port, { port = it.filter { c -> c.isDigit() } }, placeholder = "554")
 
             Box(modifier = Modifier.fillMaxWidth()) {
@@ -73,6 +74,8 @@ fun ManualScreen(vm: AppViewModel = viewModel()) {
                 onClick = {
                     testing = true
                     result = null
+                    ok = false
+                    latency = 0L
                     scope.launch {
                         try {
                             val p = port.toIntOrNull() ?: 554
@@ -82,9 +85,12 @@ fun ManualScreen(vm: AppViewModel = viewModel()) {
                             result = r.detail
                             vm.addResult(
                                 TestResult(
-                                    id = 0, scope = if (host.contains("192.168") || host.contains("10.") || host.contains("172.")) NetScope.LAN else NetScope.WAN,
-                                    target = "$host:$p", protocol = protocol,
-                                    success = r.reachable, latencyMs = r.latencyMs,
+                                    id = 0,
+                                    scope = if (host.contains("192.168") || host.contains("10.") || host.contains("172.")) NetScope.LAN else NetScope.WAN,
+                                    target = "$host:$p",
+                                    protocol = protocol,
+                                    success = r.reachable,
+                                    latencyMs = r.latencyMs,
                                     message = r.detail
                                 )
                             )
@@ -108,7 +114,11 @@ fun ManualScreen(vm: AppViewModel = viewModel()) {
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                     Spacer(Modifier.width(12.dp))
                     Column {
                         Text("正在探测…", fontWeight = FontWeight.SemiBold)
@@ -126,10 +136,19 @@ fun ManualScreen(vm: AppViewModel = viewModel()) {
                 Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     StatusDot(ok)
                     Spacer(Modifier.width(12.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(if (ok) "连接成功" else "连接失败", fontWeight = FontWeight.SemiBold)
-                        if (ok) Text("延迟：$latency ms", style = MaterialTheme.typography.labelMedium, color = Muted)
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = Muted, modifier = Modifier.padding(top = 4.dp))
+                        if (ok) Text(
+                            "延迟：$latency ms",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Muted
+                        )
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Muted,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
                     }
                 }
             }

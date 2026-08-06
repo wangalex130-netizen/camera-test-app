@@ -1,5 +1,6 @@
 package com.example.cameratest.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -48,7 +49,11 @@ fun LanScreen(vm: AppViewModel = viewModel()) {
     ) {
         SectionCard(title = "本机网络") {
             Text("本地 IP：$localIp", style = MaterialTheme.typography.bodyMedium)
-            Text("网段 /24：${subnet.ifEmpty { "—" }}${if (subnet.isEmpty()) "" else ".0/24"}", style = MaterialTheme.typography.bodyMedium, color = Muted)
+            Text(
+                "网段 /24：${subnet.ifEmpty { "—" }}${if (subnet.isEmpty()) "" else ".0/24"}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Muted
+            )
             Spacer(Modifier.height(8.dp))
             LabeledTextField(
                 label = "自定义网段（可选，留空用本机网段，如 192.168.1.0）",
@@ -98,16 +103,32 @@ fun LanScreen(vm: AppViewModel = viewModel()) {
                 modifier = Modifier.fillMaxWidth(),
                 color = MaterialTheme.colorScheme.primary
             )
-            Text("已探测 $d / $t", style = MaterialTheme.typography.labelMedium, color = Muted, modifier = Modifier.padding(top = 6.dp))
+            Text(
+                "已探测 $d / $t",
+                style = MaterialTheme.typography.labelMedium,
+                color = Muted,
+                modifier = Modifier.padding(top = 6.dp)
+            )
         }
 
         Spacer(Modifier.height(12.dp))
-        Text("发现的设备（${found.size}）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        Text(
+            "发现的设备（${found.size}） — 点击一条跳到「手动测试」自动填好",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold
+        )
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(found) { (host, port) ->
                 Card(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .clickable {
+                            // 点击设备 → 写入最近目标并切到手动测试页
+                            vm.setLastTarget("$host:$port")
+                            vm.setRoute("manual")
+                        },
                     shape = RoundedCornerShape(10.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
@@ -119,7 +140,11 @@ fun LanScreen(vm: AppViewModel = viewModel()) {
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text("$host:$port", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                            Text("开放端口 · 建议尝试 RTSP/MJPEG", style = MaterialTheme.typography.labelSmall, color = Muted)
+                            Text(
+                                "开放端口 · 建议尝试 RTSP/MJPEG",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Muted
+                            )
                         }
                         Spacer(Modifier.weight(1f))
                         ScopeBadge(NetScope.LAN)
