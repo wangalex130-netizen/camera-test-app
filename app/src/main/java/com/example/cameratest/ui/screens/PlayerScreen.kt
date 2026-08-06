@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -114,7 +115,7 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
             u
         } else {
             // 没有具体路径时，默认 /11
-            if (u.endsWith("/")) "$u11" else "$u/11"
+            if (u.endsWith("/")) "${u}11" else "$u/11"
         }
 
         runCatching {
