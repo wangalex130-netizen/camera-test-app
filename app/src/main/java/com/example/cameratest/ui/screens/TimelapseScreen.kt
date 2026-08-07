@@ -11,6 +11,8 @@ import android.provider.MediaStore
 import android.view.TextureView
 import android.view.ViewGroup
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -69,7 +71,18 @@ fun TimelapseScreen() {
 
     val libVLC = remember(context) {
         runCatching {
-            LibVLC(context, arrayListOf("--rtsp-tcp", "--network-caching=150", "--no-audio"))
+            LibVLC(
+                context,
+                arrayListOf(
+                    "--rtsp-tcp",
+                    "--network-caching=100",
+                    "--live-caching=100",
+                    "--avcodec-hw=any",
+                    "--drop-late-frames",
+                    "--skip-frames",
+                    "--no-audio"
+                )
+            )
         }.getOrNull()
     }
     val mediaPlayer = remember(context) {
@@ -116,6 +129,9 @@ fun TimelapseScreen() {
         }
         status = "连接中…"
         runCatching {
+            // 关键修复：libVLC 不允许在 view 已附加时再次 attachViews，先彻底停止并 detach
+            mediaPlayer.stop()
+            mediaPlayer.detachViews()
             val media = Media(libVLC, Uri.parse(finalUrl))
             mediaPlayer.media = media
             videoLayout?.let { layout ->
@@ -189,7 +205,14 @@ fun TimelapseScreen() {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    // 布局顺序改为：RTSP 配置 → 视频画面 → 延时参数（开始延时按钮在视频下方，无需滚动即可看到）；
+    // 整个 Column 垂直可滚动，兼容小屏。
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp)
+    ) {
         SectionCard(title = "实时画面（RTSP 拉流 · libVLC 内核）") {
             LabeledTextField("RTSP 地址", url, { url = it }, placeholder = "rtsp://user:pass@host:554/11")
             Spacer(Modifier.height(8.dp))
@@ -210,6 +233,25 @@ fun TimelapseScreen() {
                     modifier = Modifier.weight(1f)
                 )
             }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Box(
+            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 10f),
+            contentAlignment = Alignment.Center
+        ) {
+            if (mediaPlayer != null) {
+                AndroidView(
+                    factory = { ctx ->
+                        VLCVideoLayout(ctx).also { layout ->
+                            videoLayout = layout
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            if (!playing) Text("点上方「播放」开始实时画面", color = Muted)
         }
 
         Spacer(Modifier.height(12.dp))
@@ -246,7 +288,7 @@ fun TimelapseScreen() {
                     modifier = Modifier.weight(1f)
                 )
                 PrimaryButton(
-                    "停止",
+                    "停止延时",
                     enabled = capturing,
                     onClick = { stopCapture() },
                     modifier = Modifier.weight(1f)
@@ -264,26 +306,8 @@ fun TimelapseScreen() {
             }
         }
 
-        Spacer(Modifier.height(16.dp))
-
-        Box(
-            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 10f),
-            contentAlignment = Alignment.Center
-        ) {
-            if (mediaPlayer != null) {
-                AndroidView(
-                    factory = { ctx ->
-                        VLCVideoLayout(ctx).also { layout ->
-                            videoLayout = layout
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            if (!playing) Text("点「播放」开始实时画面，再点「开始延时」", color = Muted)
-        }
-
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
         Text("状态：$status", style = MaterialTheme.typography.bodyMedium, color = Muted)
+        Spacer(Modifier.height(16.dp))
     }
 }
