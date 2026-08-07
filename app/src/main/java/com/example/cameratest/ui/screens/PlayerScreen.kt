@@ -153,6 +153,12 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
         status = "连接中…"
         playerError = null
         runCatching {
+            // 关键修复：libVLC 不允许在 view 已附加时再次 attachViews。
+            // 重播/换源前必须先彻底停止并 detachViews，否则抛
+            // "Can't set view when already attached. Current state: 2"。
+            mp.stop()
+            mp.detachViews()
+
             val media = Media(vlc, Uri.parse(finalUrl))
             mp.media = media
             videoLayout?.let { layout ->
@@ -177,6 +183,17 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
         }.onFailure { Log.e(TAG, "停止失败", it) }
         playing = false
         status = "已停止"
+    }
+
+    // 由内网/手动页跳转而来：自动填充并播放识别到的摄像头
+    val pendingRtsp by vm.pendingRtsp.collectAsState()
+    LaunchedEffect(pendingRtsp) {
+        val target = pendingRtsp
+        if (target != null) {
+            url = target
+            vm.setPendingRtsp(null) // 消费掉，避免重组时重复触发
+            startPlayback()
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {

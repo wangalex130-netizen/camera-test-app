@@ -16,6 +16,12 @@ class AppViewModel : ViewModel() {
     /** 最近一次手动测试或扫描点击的目标，格式 host:port（供 ManualScreen 自动预填） */
     var lastTarget: String = "192.168.1.218:554"
 
+    /** 待自动播放的 RTSP 地址（由内网/手动页跳转到画面页时设置，播放页消费后清空） */
+    private val _pendingRtsp = MutableStateFlow<String?>(null)
+    val pendingRtsp: StateFlow<String?> = _pendingRtsp.asStateFlow()
+
+    fun setPendingRtsp(url: String?) { _pendingRtsp.value = url }
+
     /** 当前所在 Tab 的路由，由各屏幕 / 导航共享 */
     private val _route = MutableStateFlow("lan")
     val route: StateFlow<String> = _route.asStateFlow()

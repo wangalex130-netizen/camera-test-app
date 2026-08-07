@@ -16,6 +16,27 @@ import kotlin.random.Random
 data class ProbeOutcome(val reachable: Boolean, val latencyMs: Long, val detail: String)
 data class WanOutcome(val reachable: Boolean, val latencyMs: Long, val detail: String, val resolvedIp: String?)
 
+/** 摄像头识别结果：确认某台主机提供可用的 RTSP 流 */
+data class CameraIdentity(
+    val host: String,
+    val rtspPort: Int,
+    val rtspPath: String,
+    val latencyMs: Long,
+    val detail: String
+) {
+    val rtspUrl: String get() = "rtsp://$host:$rtspPort$rtspPath"
+}
+
+/**
+ * 扫描到的候选设备（一主机可能开放多个端口）。
+ * @param identity 非空表示已确认是摄像头并拿到了可用 RTSP 地址
+ */
+data class CameraDevice(
+    val host: String,
+    val openPorts: List<Int>,
+    val identity: CameraIdentity?
+)
+
 /** 摄像头常用端口（内网扫描时使用） */
 val CAMERA_PORTS = listOf(554, 5544, 80, 8080, 81, 8000, 34567, 37777, 88, 6667)
 
@@ -29,6 +50,16 @@ val COMMON_RTSP_PATHS = listOf(
     "/user=admin_password=tlJWPb65_channel=1_stream=0.sdp",
     "/stream1", "/stream"
 )
+
+/** 摄像头识别阶段只探测这些 RTSP 端口（比通用端口列表更精准，避免把 HTTP 等当摄像头） */
+val RTSP_PORTS = listOf(554, 5544, 8554, 10554, 8555)
+
+/**
+ * 自动识别阶段尝试的路径数量。
+ * COMMON_RTSP_PATHS 已按优先级排序，识别时只试前几个高频路径即可，
+ * 避免对非摄像头设备逐个尝试 15 个路径拖慢整体识别。
+ */
+private const val IDENTIFY_PATH_LIMIT = 8
 
 private fun basicAuth(user: String, password: String): String =
     Base64.encodeToString("$user:$password".toByteArray(), Base64.NO_WRAP)
@@ -260,4 +291,65 @@ suspend fun probeByProtocol(
     ProbeProtocol.RTSP -> rtspProbe(host, port, path, user, password)
     ProbeProtocol.HTTP -> tcpProbe(host, port)
     ProbeProtocol.MJPEG -> tcpProbe(host, port)
+}
+
+/**
+ * 识别单个主机是否为摄像头。
+ * 只对该主机已开放的 RTSP 候选端口做带鉴权的 RTSP OPTIONS 探测，
+ * 路径按优先级逐个尝试，命中即返回。全部失败返回 null。
+ */
+suspend fun identifyCamera(
+    host: String,
+    openPorts: List<Int>,
+    user: String,
+    password: String,
+    pathTimeoutMs: Int = 3500
+): CameraIdentity? {
+    val rtspPorts = openPorts.filter { it in RTSP_PORTS }
+    if (rtspPorts.isEmpty()) return null
+    for (port in rtspPorts) {
+        for (path in COMMON_RTSP_PATHS.take(IDENTIFY_PATH_LIMIT)) {
+            val r = rtspProbe(host, port, path, user, password, pathTimeoutMs)
+            if (r.reachable) {
+                return CameraIdentity(host, port, path, r.latencyMs, r.detail)
+            }
+        }
+    }
+    return null
+}
+
+/**
+ * 对一批主机并行识别摄像头。
+ * @param hosts 每个元素为主机及其开放端口列表（由扫描阶段汇总）
+ * @param onIdentified 每识别出一台摄像头回调（用于实时刷新 UI）
+ * @param onProgress 已识别数 / 总主机数
+ */
+suspend fun identifyCameras(
+    hosts: List<Pair<String, List<Int>>>,
+    user: String,
+    password: String,
+    concurrency: Int = 12,
+    onIdentified: (CameraIdentity) -> Unit = {},
+    onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }
+): List<CameraIdentity> = coroutineScope {
+    val sem = Semaphore(concurrency)
+    var done = 0
+    val lock = Any()
+    val found = mutableListOf<CameraIdentity>()
+    hosts.map { (host, ports) ->
+        async {
+            sem.withPermit {
+                val id = identifyCamera(host, ports, user, password)
+                synchronized(lock) {
+                    done++
+                    onProgress(done, hosts.size)
+                    if (id != null) {
+                        found.add(id)
+                        onIdentified(id)
+                    }
+                }
+            }
+        }
+    }.awaitAll()
+    found
 }
