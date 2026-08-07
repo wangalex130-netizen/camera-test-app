@@ -257,25 +257,19 @@ fun TimelapseScreen() {
         Spacer(Modifier.height(12.dp))
 
         SectionCard(title = "延时摄影") {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                LabeledTextField(
-                    "间隔（秒）",
-                    intervalStr,
-                    { intervalStr = it.filter { c -> c.isDigit() } },
-                    placeholder = "2",
-                    modifier = Modifier.weight(1f)
-                )
-                LabeledTextField(
-                    "总张数",
-                    totalStr,
-                    { totalStr = it.filter { c -> c.isDigit() } },
-                    placeholder = "30",
-                    modifier = Modifier.weight(1f)
-                )
-            }
+            // 输入框改为上下全宽排列，避免并排布局在小屏上被挤压导致无法填写
+            LabeledTextField(
+                "间隔（秒）",
+                intervalStr,
+                { intervalStr = it.filter { c -> c.isDigit() } },
+                placeholder = "2"
+            )
+            LabeledTextField(
+                "总张数",
+                totalStr,
+                { totalStr = it.filter { c -> c.isDigit() } },
+                placeholder = "30"
+            )
             Spacer(Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
