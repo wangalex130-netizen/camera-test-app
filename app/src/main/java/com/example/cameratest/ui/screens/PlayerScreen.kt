@@ -59,13 +59,22 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     // 创建 libVLC 播放内核（失败时返回 null，不会崩溃）
+    // 低延时优化参数：
+    //   --network-caching / --live-caching 降到 100ms，减少缓冲堆积
+    //   --avcodec-hw=any 强制硬件解码，降低 CPU 压力减少卡顿
+    //   --drop-late-frames + --skip-frames 网络抖动画质卡顿时丢迟到帧/跳帧，
+    //     避免帧堆积导致延迟越来越大（直播核心优化）
     val libVLC = remember(context) {
         runCatching {
             LibVLC(
                 context,
                 arrayListOf(
                     "--rtsp-tcp",
-                    "--network-caching=150",
+                    "--network-caching=100",
+                    "--live-caching=100",
+                    "--avcodec-hw=any",
+                    "--drop-late-frames",
+                    "--skip-frames",
                     "--no-audio"
                 )
             )
@@ -274,7 +283,7 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            "常见 RTSP 路径（可手填 URL 后缀）：/11  /12  /live/ch00_0  /streaming/channels/101  /onvif/streaming/channels/101",
+            "已启用低延时模式（缓存100ms/丢迟到帧）。还卡就换子码流：URL 末尾 /11（主码流）改成 /12（子码流）流畅很多。",
             style = MaterialTheme.typography.labelSmall,
             color = Muted
         )
