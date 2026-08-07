@@ -13,6 +13,11 @@ android {
         targetSdk 34
         versionCode 1
         versionName '1.0.0'
+
+        // 只保留手机真机用的 ABI，减小 APK 体积
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
     }
 
     buildTypes {
@@ -62,9 +67,6 @@ dependencies {
 
     debugImplementation 'androidx.compose.ui:ui-tooling'
 
-    // RTSP 实时画面播放 (AndroidX Media3)
-    implementation 'androidx.media3:media3-exoplayer:1.4.1'
-    implementation 'androidx.media3:media3-exoplayer-rtsp:1.4.1'
-    implementation 'androidx.media3:media3-ui:1.4.1'
-    implementation 'androidx.media3:media3-common:1.4.1'
+    // RTSP 实时画面播放：libVLC（ffmpeg 内核，对国产摄像头 RTSP 兼容性最好，且崩溃都在内部消化不会拖垮 APP）
+    implementation 'org.videolan.android:libvlc-all:3.6.4'
 }

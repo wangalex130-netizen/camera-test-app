@@ -1,10 +1,12 @@
 package com.example.cameratest.ui.screens
 
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.view.TextureView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,29 +17,32 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.rtsp.RtspMediaSource
-import androidx.media3.ui.PlayerView
 import com.example.cameratest.ui.components.LabeledTextField
 import com.example.cameratest.ui.components.PrimaryButton
 import com.example.cameratest.ui.components.SectionCard
 import com.example.cameratest.ui.theme.Muted
 import com.example.cameratest.viewmodel.AppViewModel
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
 
 private const val TAG = "PlayerScreen"
 
 /**
- * 实时画面（RTSP 拉流）。
- * 关键防闪退：
- *  1. ExoPlayer 创建包 try/catch，建失败时直接给错误提示而不是 crash
- *  2. setMediaSource/prepare 包 try/catch
- *  3. onPlayerError 接收 ExoPlayer 回调，写到 status 上而不是抛回主线程
- *  4. DisposableEffect 在 onDispose 时安全释放（catch Throwable）
- *  5. 路径为空时自动补 /11
- *  6. TCP / UDP 可切换（国产摄像头 RTSP 用 UDP 经常不通，TCP 更稳）
+ * 实时画面（RTSP 拉流），使用 libVLC 播放内核。
+ *
+ * 为什么换掉 AndroidX Media3：
+ *   - Media3 的 RTSP 模块在部分国产摄像头（CamHipro/V380 等）上会直接在内部
+ *     网络线程抛异常导致进程崩溃，外层 try/catch 拦不住（线程级崩溃）。
+ *   - libVLC 基于 ffmpeg，RTSP over TCP 兼容性业界最强，且所有错误都收敛到
+ *     自己的 native 层并通过事件回调返回，不会把 APP 整个拖崩。
+ *
+ * 关键点：
+ *  1. --rtsp-tcp 强制走 TCP（国产摄像头 UDP 经常不通）
+ *  2. --network-caching=150 减小延迟
+ *  3. --no-audio 跳过音频，只解视频，避免音频解码器冲突
+ *  4. 播放器事件回调切回主线程再更新 Compose 状态
+ *  5. 每次释放播放器都包 runCatching，绝不抛出
  */
 @Composable
 fun PlayerScreen(vm: AppViewModel = viewModel()) {
@@ -49,84 +54,115 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
     var url by remember(vm.lastTarget) { mutableStateOf(defaultUrl) }
     var status by remember { mutableStateOf("待命") }
     var playing by remember { mutableStateOf(false) }
-    var useTcp by remember { mutableStateOf(true) }
     var playerError by remember { mutableStateOf<String?>(null) }
+    var textureView by remember { mutableStateOf<TextureView?>(null) }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
-    // 关键：用一个稳定的 ExoPlayer 实例（在 remember 里创建失败的话也保留 null 状态）
-    val exoPlayer: ExoPlayer? = remember(context) {
+    // 创建 libVLC 播放内核（失败时返回 null，不会崩溃）
+    val libVLC = remember(context) {
         runCatching {
-            ExoPlayer.Builder(context).build().apply {
-                playWhenReady = true
-            }
-        }.onFailure { e ->
-            Log.e(TAG, "ExoPlayer.Builder 失败", e)
-            null
-        }.getOrNull()
+            LibVLC(
+                context,
+                arrayListOf(
+                    "--rtsp-tcp",
+                    "--network-caching=150",
+                    "--no-audio"
+                )
+            )
+        }.onFailure { Log.e(TAG, "LibVLC 初始化失败", it) }.getOrNull()
     }
 
-    DisposableEffect(exoPlayer) {
-        if (exoPlayer == null) {
-            status = "播放器初始化失败"
-            onDispose { }
-        } else {
-            val listener = object : Player.Listener {
-                override fun onPlaybackStateChanged(state: Int) {
-                    status = when (state) {
-                        Player.STATE_IDLE -> "待命"
-                        Player.STATE_BUFFERING -> "连接 / 缓冲中…"
-                        Player.STATE_READY -> {
+    val mediaPlayer = remember(context) {
+        libVLC?.let { vlc ->
+            runCatching { MediaPlayer(vlc) }
+                .onFailure { Log.e(TAG, "MediaPlayer 创建失败", it) }
+                .getOrNull()
+        }
+    }
+
+    DisposableEffect(mediaPlayer) {
+        if (mediaPlayer != null) {
+            mediaPlayer.setEventListener { event ->
+                mainHandler.post {
+                    when (event.type) {
+                        MediaPlayer.Event.Opening -> status = "正在打开流…"
+                        MediaPlayer.Event.Buffering -> status = "缓冲中…"
+                        MediaPlayer.Event.Playing -> {
                             playing = true
-                            "已连接，播放中"
+                            playerError = null
+                            status = "已连接，播放中"
                         }
-                        Player.STATE_ENDED -> "结束"
-                        else -> status
+                        MediaPlayer.Event.Stopped -> {
+                            playing = false
+                            status = "已停止"
+                        }
+                        MediaPlayer.Event.EndReached -> {
+                            playing = false
+                            status = "已结束"
+                        }
+                        MediaPlayer.Event.EncounteredError -> {
+                            playing = false
+                            val msg = "无法连接摄像头，或该流格式不受支持"
+                            playerError = msg
+                            status = "播放失败"
+                        }
                     }
                 }
-
-                override fun onPlayerError(error: PlaybackException) {
-                    Log.e(TAG, "ExoPlayer 播放错误", error)
-                    playing = false
-                    val code = error.errorCodeName
-                    val msg = error.localizedMessage ?: error.message ?: "未知错误"
-                    playerError = "播放失败 ($code): $msg"
-                    status = "播放失败：$msg"
-                }
             }
-            exoPlayer.addListener(listener)
-            onDispose {
-                runCatching {
-                    exoPlayer.removeListener(listener)
-                    exoPlayer.stop()
-                    exoPlayer.clearMediaItems()
-                    exoPlayer.release()
-                }.onFailure { Log.e(TAG, "释放播放器失败", it) }
-            }
+        }
+        onDispose {
+            runCatching {
+                mediaPlayer?.setEventListener(null)
+            }.onFailure { Log.e(TAG, "移除监听失败", it) }
+            runCatching {
+                mediaPlayer?.stop()
+                mediaPlayer?.detachViews()
+                mediaPlayer?.release()
+            }.onFailure { Log.e(TAG, "释放播放器失败", it) }
+            runCatching { libVLC?.release() }
+                .onFailure { Log.e(TAG, "释放 LibVLC 失败", it) }
         }
     }
 
     fun startPlayback() {
         val u = url.trim()
-        if (u.isEmpty() || exoPlayer == null) return
-        status = "连接中…"
-        playerError = null
-
-        // 自动补路径：用户可能只填了 rtsp://user:pass@host:port
-        val finalUrl = if (u.contains("/11") || u.contains("/live") || u.contains("/stream") || u.contains("/video") || u.contains("/av") || u.contains("/onvif")) {
-            u
-        } else {
-            // 没有具体路径时，默认 /11
-            if (u.endsWith("/")) "${u}11" else "$u/11"
+        if (u.isEmpty()) {
+            playerError = "请先填写 RTSP 地址"
+            status = playerError!!
+            return
+        }
+        val mp = mediaPlayer
+        val vlc = libVLC
+        if (mp == null || vlc == null) {
+            playerError = "播放器初始化失败，此设备无法使用视频播放"
+            status = playerError!!
+            return
         }
 
+        var finalUrl = u
+        if (!finalUrl.startsWith("rtsp://", ignoreCase = true)) {
+            finalUrl = "rtsp://$finalUrl"
+        }
+        // 没有具体路径时补 /11（默认主码流）
+        val hasPath = listOf("/11", "/12", "/13", "/live", "/stream", "/video", "/av", "/onvif")
+            .any { finalUrl.contains(it) }
+        if (!hasPath) {
+            finalUrl = if (finalUrl.endsWith("/")) "${finalUrl}11" else "$finalUrl/11"
+        }
+
+        status = "连接中…"
+        playerError = null
         runCatching {
-            val source = RtspMediaSource.Factory()
-                .setForceUseRtpTcp(useTcp)
-                .createMediaSource(MediaItem.fromUri(Uri.parse(finalUrl)))
-            exoPlayer.setMediaSource(source)
-            exoPlayer.playWhenReady = true
-            exoPlayer.prepare()
+            val media = Media(vlc, Uri.parse(finalUrl))
+            mp.media = media
+            textureView?.let { tv ->
+                mp.attachViews(null, tv, false, false)
+            }
+            media.release()
+            mp.play()
+            playing = true
         }.onFailure { e ->
-            Log.e(TAG, "startPlayback 失败", e)
+            Log.e(TAG, "启动播放失败: $finalUrl", e)
             playing = false
             playerError = "启动播放失败: ${e.message}"
             status = playerError!!
@@ -134,38 +170,28 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
     }
 
     fun stopPlayback() {
-        if (exoPlayer == null) return
         runCatching {
-            exoPlayer.stop()
-            exoPlayer.clearMediaItems()
-        }.onFailure { Log.e(TAG, "stop 失败", it) }
+            mediaPlayer?.stop()
+            mediaPlayer?.detachViews()
+        }.onFailure { Log.e(TAG, "停止失败", it) }
         playing = false
         status = "已停止"
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        SectionCard(title = "实时画面（RTSP 拉流）") {
+        SectionCard(title = "实时画面（RTSP 拉流 · libVLC 内核）") {
             LabeledTextField(
                 "RTSP 地址",
                 url,
                 { url = it },
-                placeholder = "rtsp://user:pass@host:554/11"
+                placeholder = "rtsp://admin:abc123456@192.168.1.218:554/11"
             )
             Spacer(Modifier.height(8.dp))
-            // TCP / UDP 切换
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
-                    checked = useTcp,
-                    onCheckedChange = { useTcp = it }
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    if (useTcp) "传输：RTP over TCP（推荐，国产摄像头用 TCP 更稳）"
-                    else "传输：RTP over UDP（部分摄像头需 UDP）",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Muted
-                )
-            }
+            Text(
+                "传输方式已固定为 RTP over TCP（国产摄像头最稳）",
+                style = MaterialTheme.typography.bodySmall,
+                color = Muted
+            )
             Spacer(Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -196,21 +222,12 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
                 .background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            if (exoPlayer != null) {
+            if (mediaPlayer != null) {
                 AndroidView(
                     factory = { ctx ->
-                        runCatching {
-                            PlayerView(ctx).apply {
-                                useController = true
-                                setBackgroundColor(android.graphics.Color.BLACK)
-                                player = exoPlayer
-                            }
-                        }.getOrElse { e ->
-                            Log.e(TAG, "PlayerView 创建失败", e)
-                            android.widget.TextView(ctx).apply {
-                                text = "PlayerView 创建失败"
-                                setTextColor(android.graphics.Color.WHITE)
-                            }
+                        TextureView(ctx).also { tv ->
+                            textureView = tv
+                            tv.setOpaque(false)
                         }
                     },
                     modifier = Modifier.fillMaxSize()
@@ -218,7 +235,7 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
             }
             if (!playing) {
                 Text(
-                    if (playerError != null) "" else "点「播放」查看实时画面",
+                    if (playerError != null) "播放失败，详见下方提示" else "点「播放」查看实时画面",
                     color = Color.White
                 )
             }
