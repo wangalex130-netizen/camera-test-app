@@ -4,7 +4,6 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.TextureView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -25,6 +24,7 @@ import com.example.cameratest.viewmodel.AppViewModel
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.util.VLCVideoLayout
 
 private const val TAG = "PlayerScreen"
 
@@ -55,7 +55,7 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
     var status by remember { mutableStateOf("待命") }
     var playing by remember { mutableStateOf(false) }
     var playerError by remember { mutableStateOf<String?>(null) }
-    var textureView by remember { mutableStateOf<TextureView?>(null) }
+    var videoLayout by remember { mutableStateOf<VLCVideoLayout?>(null) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     // 创建 libVLC 播放内核（失败时返回 null，不会崩溃）
@@ -155,8 +155,9 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
         runCatching {
             val media = Media(vlc, Uri.parse(finalUrl))
             mp.media = media
-            textureView?.let { tv ->
-                mp.attachViews(null, tv, false, false)
+            videoLayout?.let { layout ->
+                // 最后一个参数 textureView=true：内部用 TextureView 渲染
+                mp.attachViews(layout, null, false, true)
             }
             media.release()
             mp.play()
@@ -225,9 +226,8 @@ fun PlayerScreen(vm: AppViewModel = viewModel()) {
             if (mediaPlayer != null) {
                 AndroidView(
                     factory = { ctx ->
-                        TextureView(ctx).also { tv ->
-                            textureView = tv
-                            tv.setOpaque(false)
+                        VLCVideoLayout(ctx).also { layout ->
+                            videoLayout = layout
                         }
                     },
                     modifier = Modifier.fillMaxSize()

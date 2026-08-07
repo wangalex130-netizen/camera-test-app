@@ -5,10 +5,12 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.view.TextureView
+import android.view.ViewGroup
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,11 +19,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
-import androidx.media3.common.PlaybackException
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import com.example.cameratest.ui.components.LabeledTextField
 import com.example.cameratest.ui.components.PrimaryButton
 import com.example.cameratest.ui.components.SectionCard
@@ -30,13 +27,29 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.util.VLCVideoLayout
 import java.io.File
 import java.io.FileOutputStream
+
+/** 从 VLCVideoLayout 内部递归找出渲染用的 TextureView（textureView 模式时 libVLC 内部使用它） */
+private fun findTextureView(root: ViewGroup): TextureView? {
+    for (i in 0 until root.childCount) {
+        val child = root.getChildAt(i)
+        when (child) {
+            is TextureView -> return child
+            is ViewGroup -> findTextureView(child)?.let { return it }
+        }
+    }
+    return null
+}
 
 @Composable
 fun TimelapseScreen() {
     val context = LocalContext.current
-    var url by remember { mutableStateOf("rtsp://admin:abc123456@192.168.1.60:554/11") }
+    var url by remember { mutableStateOf("rtsp://admin:abc123456@192.168.1.218:554/11") }
     var status by remember { mutableStateOf("待命") }
     var playing by remember { mutableStateOf(false) }
 
@@ -49,10 +62,19 @@ fun TimelapseScreen() {
     var captured by remember { mutableStateOf(0) }
     var lastSaved by remember { mutableStateOf<String?>(null) }
 
-    val textureViewRef = remember { mutableStateOf<TextureView?>(null) }
-    val exoPlayer = remember { ExoPlayer.Builder(context).build() }
+    var videoLayout by remember { mutableStateOf<VLCVideoLayout?>(null) }
     val scope = rememberCoroutineScope()
     var job by remember { mutableStateOf<Job?>(null) }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+
+    val libVLC = remember(context) {
+        runCatching {
+            LibVLC(context, arrayListOf("--rtsp-tcp", "--network-caching=150", "--no-audio"))
+        }.getOrNull()
+    }
+    val mediaPlayer = remember(context) {
+        libVLC?.let { runCatching { MediaPlayer(it) }.getOrNull() }
+    }
 
     fun stopCapture() {
         job?.cancel()
@@ -86,25 +108,34 @@ fun TimelapseScreen() {
 
     fun startPlayback() {
         val u = url.trim()
-        val tv = textureViewRef.value
-        if (u.isEmpty() || tv == null) return
+        if (u.isEmpty() || mediaPlayer == null || libVLC == null) return
+        var finalUrl = u
+        if (!finalUrl.startsWith("rtsp://", ignoreCase = true)) finalUrl = "rtsp://$finalUrl"
+        if (!listOf("/11", "/12", "/13", "/live", "/stream", "/video", "/av", "/onvif").any { finalUrl.contains(it) }) {
+            finalUrl = if (finalUrl.endsWith("/")) "${finalUrl}11" else "$finalUrl/11"
+        }
         status = "连接中…"
-        try {
-            exoPlayer.setVideoTextureView(tv)
-            val source = RtspMediaSource.Factory().setForceUseRtpTcp(true)
-                .createMediaSource(MediaItem.fromUri(Uri.parse(u)))
-            exoPlayer.setMediaSource(source)
-            exoPlayer.playWhenReady = true
-            exoPlayer.prepare()
-        } catch (e: Exception) {
-            status = "播放失败：${e.localizedMessage}"
+        runCatching {
+            val media = Media(libVLC, Uri.parse(finalUrl))
+            mediaPlayer.media = media
+            videoLayout?.let { layout ->
+                mediaPlayer.attachViews(layout, null, false, true)
+            }
+            media.release()
+            mediaPlayer.play()
+            playing = true
+        }.onFailure { e ->
+            playing = false
+            status = "播放失败：${e.message}"
         }
     }
 
     fun stopPlayback() {
         stopCapture()
-        exoPlayer.stop()
-        exoPlayer.setVideoTextureView(null)
+        runCatching {
+            mediaPlayer?.stop()
+            mediaPlayer?.detachViews()
+        }
         playing = false
         status = "已停止"
     }
@@ -115,45 +146,51 @@ fun TimelapseScreen() {
         job = scope.launch {
             while (isActive && captured < total) {
                 delay(interval * 1000L)
-                val bmp = textureViewRef.value?.bitmap
+                val tv = videoLayout?.let { findTextureView(it) }
+                val bmp = tv?.bitmap
                 if (bmp != null) {
                     lastSaved = saveFrame(bmp, captured + 1)
                     captured++
                 } else {
-                    lastSaved = "未取到画面（请先播放）"
+                    lastSaved = "未取到画面（请确认已播放）"
                 }
             }
             capturing = false
         }
     }
 
-    DisposableEffect(Unit) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                status = when (state) {
-                    Player.STATE_IDLE -> "待命"
-                    Player.STATE_BUFFERING -> "连接 / 缓冲中…"
-                    Player.STATE_READY -> { playing = true; "已连接，播放中" }
-                    Player.STATE_ENDED -> "结束"
-                    else -> status
+    DisposableEffect(mediaPlayer) {
+        if (mediaPlayer != null) {
+            mediaPlayer.setEventListener { event ->
+                mainHandler.post {
+                    when (event.type) {
+                        MediaPlayer.Event.Opening -> status = "正在打开流…"
+                        MediaPlayer.Event.Buffering -> status = "缓冲中…"
+                        MediaPlayer.Event.Playing -> { playing = true; status = "已连接，播放中" }
+                        MediaPlayer.Event.Stopped -> { playing = false; status = "已停止" }
+                        MediaPlayer.Event.EncounteredError -> {
+                            playing = false
+                            stopCapture()
+                            status = "播放失败：无法连接摄像头或流格式不受支持"
+                        }
+                        MediaPlayer.Event.EndReached -> { playing = false; status = "已结束" }
+                    }
                 }
             }
-
-            override fun onPlayerError(error: PlaybackException) {
-                status = "播放失败：${error.localizedMessage ?: error.message ?: "未知错误"}"
-                playing = false
-                stopCapture()
-            }
         }
-        exoPlayer.addListener(listener)
         onDispose {
-            exoPlayer.removeListener(listener)
-            exoPlayer.release()
+            runCatching { mediaPlayer?.setEventListener(null) }
+            runCatching {
+                mediaPlayer?.stop()
+                mediaPlayer?.detachViews()
+                mediaPlayer?.release()
+            }
+            runCatching { libVLC?.release() }
         }
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        SectionCard(title = "实时画面（RTSP 拉流）") {
+        SectionCard(title = "实时画面（RTSP 拉流 · libVLC 内核）") {
             LabeledTextField("RTSP 地址", url, { url = it }, placeholder = "rtsp://user:pass@host:554/11")
             Spacer(Modifier.height(8.dp))
             Row(
@@ -233,15 +270,16 @@ fun TimelapseScreen() {
             modifier = Modifier.fillMaxWidth().aspectRatio(16f / 10f),
             contentAlignment = Alignment.Center
         ) {
-            AndroidView(
-                factory = { ctx ->
-                    TextureView(ctx).apply {
-                        keepScreenOn = true
-                        textureViewRef.value = this
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+            if (mediaPlayer != null) {
+                AndroidView(
+                    factory = { ctx ->
+                        VLCVideoLayout(ctx).also { layout ->
+                            videoLayout = layout
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
             if (!playing) Text("点「播放」开始实时画面，再点「开始延时」", color = Muted)
         }
 
